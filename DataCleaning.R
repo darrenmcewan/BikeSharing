@@ -30,6 +30,8 @@ complete$date  = date(complete$datetime1)
 complete$day  <- wday(complete$datetime1, label=TRUE)
 complete$hour <-  hour(complete$datetime1)
 complete$rush_hour <- ifelse(complete$hour >= 7 & complete$hour <= 10 & complete$workingday == 1| complete$hour >= 4 & complete$hour <= 6 & complete$workingday == 1, TRUE, FALSE)
+complete$month <- month(complete$datetime1)
+complete$year <- year(complete$datetime1)
 
 complete <- complete %>% select(-date, -datetime1)
 complete$season<- as.factor(complete$season)
@@ -37,6 +39,8 @@ complete$holiday<- as.factor(complete$holiday)
 complete$workingday<- as.factor(complete$workingday)
 complete$weather<- as.factor(complete$weather)
 complete$hour<- as.factor(complete$hour)
+complete$month <- as.factor(complete$month)
+complete$year <- as.factor(complete$year)
 
 complete <- complete %>% select(-atemp)
 
@@ -47,6 +51,31 @@ complete <- complete %>% select(-atemp)
 
 train <- complete %>% filter(!is.na(count))
 test <- complete %>% filter(is.na(count))
+
+library(lime)
+
+##################################################################
+# Train LIME Explainer
+expln <- lime(train, model = gbm)
+preds <- predict(gbm,train,type = "raw")
+# Add ranger to LIME
+predict_model.ranger <- function(x, newdata, type, ...) {
+  res <- predict(x, data = newdata, ...)
+  switch(
+    type,
+    raw = data.frame(Response = ifelse(res$predictions[,"Yes"] >= 0.5,"Yes","No"), stringsAsFactors = FALSE),
+    prob = as.data.frame(res$predictions[,"Yes"], check.names = FALSE)
+  )
+}
+model_type.ranger <- function(x, ...) 'classification'
+reasons.forward <- explain(x=test[,names(test)!="datetime"], explainer=expln, n_labels = 1, n_features = 4)
+reasons.ridge <- explain(x=test[,names(test)!="datetime"], explainer=expln, n_labels = 1, n_features = 4, feature_select = "highest_weights")
+reasons.lasso <- explain(x=test[,names(test)!="datetime"], explainer=expln, n_labels = 1, n_features = 4, feature_select = "lasso_path")
+reasons.tree <- explain(x=test[,names(test)!="datetime"], explainer=expln, n_labels = 1, n_features = 4, feature_select = "tree")
+
+##################################################################
+
+plot_explanations(gbm)
 
 custom_summary = function(data, lev = NULL, model = NULL) {
   library(Metrics)
@@ -61,15 +90,10 @@ control = trainControl(method = "cv",
 
 
 
-bike.model <- train(form=count~.-datetime, 
-                    data=train,
-                    method="ranger"
-                    metric="RMSLE",
-                    trControl=control, )
 
 gbm <- train(count~.-datetime,
              data = train, 
-             method = "gbm",
+             method = "xgbTree",
              verbose = FALSE,
              type="response"
              
@@ -82,4 +106,4 @@ preds.frame <- data.frame(datetime = test$datetime, count = preds)
 preds.frame$count<- ifelse(preds.frame$count < 0,0,preds.frame$count)
 
 
-write_csv(preds.frame, "bikeSharegbm.csv")
+write.csv(preds.frame, "testxgboost.csv", row.names = FALSE)
