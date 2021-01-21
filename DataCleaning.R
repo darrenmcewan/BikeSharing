@@ -1,11 +1,9 @@
-library(dplyr)
+library(tidyverse)
 library(lubridate)
-library(chron)
 library(MLmetrics)
 library(caret)
-library(randomForest)
-library(vroom)
-library(DataExplorer)
+library(xgboost)
+library(lime)
 
 #Import and clean data
 train <- read.csv("train.csv")
@@ -34,6 +32,8 @@ complete$month <- month(complete$datetime1)
 complete$year <- year(complete$datetime1)
 
 complete <- complete %>% select(-date, -datetime1)
+
+#Make sure all variables are factors that need to be
 complete$season<- as.factor(complete$season)
 complete$holiday<- as.factor(complete$holiday)
 complete$workingday<- as.factor(complete$workingday)
@@ -42,68 +42,62 @@ complete$hour<- as.factor(complete$hour)
 complete$month <- as.factor(complete$month)
 complete$year <- as.factor(complete$year)
 
+#Highly correlated with temp, so we can leave it
 complete <- complete %>% select(-atemp)
 
-## Dummy variable encoding - one-hot encoding
-#dummyVars(count~season, data =complete) %>%  predict(complete) %>% as.data.frame() %>% bind_cols(complete %>% select(-season))
+#Change to log because the metric for the competition is rmsle and also the distribution of counts is skewed.
+complete$count = log1p(complete$count)
 
 
-
+#Split test/train
 train <- complete %>% filter(!is.na(count))
 test <- complete %>% filter(is.na(count))
 
-library(lime)
 
-##################################################################
-# Train LIME Explainer
-expln <- lime(train, model = gbm)
-preds <- predict(gbm,train,type = "raw")
-# Add ranger to LIME
-predict_model.ranger <- function(x, newdata, type, ...) {
-  res <- predict(x, data = newdata, ...)
-  switch(
-    type,
-    raw = data.frame(Response = ifelse(res$predictions[,"Yes"] >= 0.5,"Yes","No"), stringsAsFactors = FALSE),
-    prob = as.data.frame(res$predictions[,"Yes"], check.names = FALSE)
-  )
-}
-model_type.ranger <- function(x, ...) 'classification'
-reasons.forward <- explain(x=test[,names(test)!="datetime"], explainer=expln, n_labels = 1, n_features = 4)
-reasons.ridge <- explain(x=test[,names(test)!="datetime"], explainer=expln, n_labels = 1, n_features = 4, feature_select = "highest_weights")
-reasons.lasso <- explain(x=test[,names(test)!="datetime"], explainer=expln, n_labels = 1, n_features = 4, feature_select = "lasso_path")
-reasons.tree <- explain(x=test[,names(test)!="datetime"], explainer=expln, n_labels = 1, n_features = 4, feature_select = "tree")
+#Grid space to search for the best hyperparameters
+xgbGrid <- expand.grid(nrounds = c(100,200),  # this is n_estimators in the python code above
+                       max_depth = c(10, 15, 20, 25),
+                       colsample_bytree = seq(0.5, 0.9, length.out = 5),
+                       ## The values below are default values in the sklearn-api. 
+                       eta = 0.1,
+                       gamma=0,
+                       min_child_weight = 1,
+                       subsample = 1
+)
 
-##################################################################
 
-plot_explanations(gbm)
+#Specify cross-validation method and number of folds. Also enable parallel computation
 
-custom_summary = function(data, lev = NULL, model = NULL) {
-  library(Metrics)
-  out = rmsle(data[, "obs"], data[, "pred"])
-  names(out) = c("rmsle")
-  out
-}
-
-control = trainControl(method = "cv",  
-                       number = 10,     
-                       summaryFunction = custom_summary)
+xgb_trcontrol = trainControl(
+  method = "cv",
+  number = 5,  
+  allowParallel = TRUE,
+  verboseIter = FALSE,
+  returnData = FALSE
+)
 
 
 
-
+#Train the model
 gbm <- train(count~.-datetime,
              data = train, 
+             trControl = xgb_trcontrol,
+             tuneGrid = xgbGrid,
              method = "xgbTree",
              verbose = FALSE,
-             type="response"
-             
-)
+             type="response")
+
+gbm$bestTune
+#   nrounds max_depth eta gamma colsample_bytree min_child_weight subsample
+#     200        15   0.1     0              0.8                1         1
 
 
 preds <- predict(gbm, newdata = test)
 
+#Change preds back from log
+preds <- expm1(preds)
+
 preds.frame <- data.frame(datetime = test$datetime, count = preds)
 preds.frame$count<- ifelse(preds.frame$count < 0,0,preds.frame$count)
 
-
-write.csv(preds.frame, "testxgboost.csv", row.names = FALSE)
+write.csv(preds.frame, "xgboost_log.csv", row.names = FALSE)
