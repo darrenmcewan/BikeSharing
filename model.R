@@ -104,7 +104,5 @@ preds <- expm1(preds)
 
 preds.frame <- data.frame(datetime = test$datetime, count = preds)
 
-#In the case of any negative predictions, we will set it at 0
-preds.frame$count<- ifelse(preds.frame$count < 0,0,preds.frame$count)
 
 write.csv(preds.frame, "xgboost_log1.csv", row.names = FALSE)
