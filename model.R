@@ -60,10 +60,9 @@ test <- complete %>% filter(is.na(count))
 
 
 #Grid space to search for the best hyperparameters
-xgbGrid <- expand.grid(nrounds = c(100,200),  # this is n_estimators in the python code above
+xgbGrid <- expand.grid(nrounds = c(100,200),  
                        max_depth = c(10, 15, 20, 25),
                        colsample_bytree = seq(0.5, 0.9, length.out = 5),
-                       ## The values below are default values in the sklearn-api. 
                        eta = 0.1,
                        gamma=0,
                        min_child_weight = 1,
